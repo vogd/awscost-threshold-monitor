@@ -167,6 +167,7 @@ def check_period(tag_key, tag_value, period, config, max_dt):
     return False
 
 def handler(event, context):
+    logger.info('START cost-threshold-monitor')
     alerts_sent = 0
 
     try:
@@ -179,6 +180,9 @@ def handler(event, context):
         logger.info('No thresholds configured in SSM')
         return {'alerts_sent': 0}
 
+    logger.info('Loaded %d threshold(s): %s', len(thresholds),
+        ', '.join(f'{tk}={tv}' for tk, tv, _ in thresholds))
+
     try:
         max_date = get_max_date()
         max_dt = datetime.strptime(max_date[:19], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
@@ -187,13 +191,20 @@ def handler(event, context):
         logger.error('Failed to fetch max usage_date: %s', str(e))
         raise
 
+    results = []
     for tag_key, tag_value, config in thresholds:
         for period in ('daily', 'monthly'):
             period_config = config.get(period)
             if period_config is None:
                 continue
-            if check_period(tag_key, tag_value, period, period_config, max_dt):
+            logger.info('Checking %s=%s period=%s', tag_key, tag_value, period)
+            breached = check_period(tag_key, tag_value, period, period_config, max_dt)
+            results.append({'tag': f'{tag_key}={tag_value}', 'period': period, 'alert_sent': breached})
+            if breached:
                 alerts_sent += 1
 
-    logger.info('%d alert(s) sent', alerts_sent)
+    for r in results:
+        logger.info('Result: %s [%s] alert_sent=%s', r['tag'], r['period'], r['alert_sent'])
+
+    logger.info('END cost-threshold-monitor: %d alert(s) sent out of %d check(s)', alerts_sent, len(results))
     return {'alerts_sent': alerts_sent}

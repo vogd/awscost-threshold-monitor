@@ -13,7 +13,8 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region  = var.region
+  profile = var.profile
 }
 
 # ── Data sources (auto-derive account ID and bucket names) ───────────────────
@@ -22,9 +23,14 @@ data "aws_caller_identity" "current" {}
 
 data "external" "athena_workgroup" {
   program = ["bash", "-c", <<-EOF
+    PROFILE_ARG=""
+    if [ -n "${var.profile != null ? var.profile : ""}" ]; then
+      PROFILE_ARG="--profile ${var.profile}"
+    fi
     LOCATION=$(aws athena get-work-group \
       --work-group "${var.athena_workgroup}" \
       --region "${var.region}" \
+      $PROFILE_ARG \
       --query 'WorkGroup.Configuration.ResultConfiguration.OutputLocation' \
       --output text)
     BUCKET=$(echo "$LOCATION" | sed 's|s3://||' | cut -d'/' -f1)

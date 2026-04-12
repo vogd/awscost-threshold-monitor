@@ -3,6 +3,12 @@ variable "ses_sender" {
   type        = string
 }
 
+variable "profile" {
+  description = "AWS CLI profile name"
+  type        = string
+  default     = null
+}
+
 variable "region" {
   description = "AWS region for deployment and runtime"
   type        = string
