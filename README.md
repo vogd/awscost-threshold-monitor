@@ -10,11 +10,41 @@ EventBridge (rate 1 hour) → Lambda → Athena (summary_view + cur2) → SES em
                               SSM Parameters (thresholds)
 ```
 
+## Why CUDOS/CID instead of Cost Explorer API
+
+This solution queries Athena tables populated by [CUDOS](https://catalog.workshops.aws/awscid/en-US) (CUR 2.0 data exports) rather than the AWS Cost Explorer API. Key reasons:
+
+| | Cost Explorer API | CUDOS / Athena (this solution) |
+|---|---|---|
+| Hourly cost data | ❌ Daily and monthly only | ✅ Hourly line items from CUR 2.0 |
+| Resource ARNs | EC2 only, 14-day limit | ✅ All services, full history |
+| Tag filtering | Limited to cost allocation tags, max 2 group-by dimensions | ✅ Any tag via SQL, unlimited grouping |
+| Query flexibility | Fixed API parameters | Full SQL — joins, subqueries, window functions |
+| Cost per query | $0.01 per API call | ~$0.005 per query (data scanned) |
+| Historical depth | 12 months | Full CUR history |
+
+The hourly granularity and resource-level ARN detail across all services are capabilities that Cost Explorer simply cannot provide. The tradeoff is that CUDOS must be deployed first.
+
 ## Prerequisites
+
+### CUDOS/CID deployment
+
+This solution requires CUDOS (or CID) to be deployed in your account, which provides the Athena tables (`summary_view`, `cur2`) used for cost queries. CUDOS setup includes:
+
+1. **CUR 2.0 data export** — configured in AWS Billing console with:
+   - Hourly granularity enabled
+   - Resource IDs included
+   - Export to S3 bucket (e.g. `cid-<account_id>-data-exports`)
+2. **Athena workgroup** — typically named `CID`, with a results S3 bucket
+3. **Glue database and tables** — `cid_data_export` database with `summary_view` (aggregated daily costs) and `cur2` (raw hourly line items with resource ARNs)
+4. **Glue crawler or CloudFormation** — to keep table schemas in sync with CUR data
+
+Deploy CUDOS using the official workshop: https://catalog.workshops.aws/awscid/en-US
+
+### Other prerequisites
 
 - AWS CLI configured with sufficient permissions
 - Terraform >= 1.0
-- CUDOS/CID deployed (Athena workgroup, database, S3 buckets)
 - SES sender email you can verify (check inbox for AWS verification link)
 
 ## Project structure
