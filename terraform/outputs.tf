@@ -18,6 +18,10 @@ output "cid_data_bucket" {
   value = local.cid_data_bucket
 }
 
+output "data_export_name" {
+  value = var.data_export_name
+}
+
 output "invoke_command" {
   value = "aws lambda invoke --function-name ${var.function_name} --region ${var.region} --payload '{}' --cli-binary-format raw-in-base64-out /tmp/out.json && cat /tmp/out.json"
 }
