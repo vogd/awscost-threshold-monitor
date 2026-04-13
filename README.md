@@ -99,6 +99,15 @@ EOF
 terraform init
 terraform apply
 
+# Or deploy with command line parameters instead of terraform.tfvars
+terraform apply \
+  -var='ses_sender=your-email@gmail.com' \
+  -var='region=us-east-1' \
+  -var='athena_workgroup=CID' \
+  -var='database=customer_cur_data' \
+  -var='cid_data_bucket=cid-<account_id>-<your-bucket-name>' \
+  -var='data_export_name=<yourCUR-export-name>'
+
 # Verify SES — click the link in the verification email sent to your address
 ```
 
