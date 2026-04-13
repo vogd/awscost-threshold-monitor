@@ -1,7 +1,36 @@
+# ── Required: CUDOS environment ───────────────────────────────────────────────
+
 variable "ses_sender" {
   description = "From address for alert emails (must be SES-verified)"
   type        = string
 }
+
+variable "region" {
+  description = "AWS region where CUDOS is deployed"
+  type        = string
+}
+
+variable "athena_workgroup" {
+  description = "Athena workgroup where CUDOS/CID is deployed"
+  type        = string
+}
+
+variable "database" {
+  description = "Athena database name created by CUDOS"
+  type        = string
+}
+
+variable "cid_data_bucket" {
+  description = "S3 bucket where CUR data exports are stored"
+  type        = string
+}
+
+variable "data_export_name" {
+  description = "CUR 2.0 data export name (S3 path: s3://<bucket>/cur2/<data_export_name>/data/)"
+  type        = string
+}
+
+# ── Optional: read from CUDOS workgroup ──────────────────────────────────────
 
 variable "profile" {
   description = "AWS CLI profile name"
@@ -9,23 +38,7 @@ variable "profile" {
   default     = null
 }
 
-variable "region" {
-  description = "AWS region for deployment and runtime"
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "athena_workgroup" {
-  description = "Athena workgroup where CUDOS/CID is deployed"
-  type        = string
-  default     = "CID"
-}
-
-variable "database" {
-  description = "Athena database name"
-  type        = string
-  default     = "cid_data_export"
-}
+# ── Optional: Lambda configuration (sensible defaults) ───────────────────────
 
 variable "function_name" {
   description = "Lambda function name"
