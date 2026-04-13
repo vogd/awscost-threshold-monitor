@@ -1,1 +1,1 @@
-ses_sender = "golovaty.alexander@googlemail.com"
+ses_sender = "youremail@mail.com"
