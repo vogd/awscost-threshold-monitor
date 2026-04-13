@@ -1,1 +1,13 @@
-ses_sender = "your-verified-email@example.com"
+# Required
+ses_sender       = "your-verified-email@example.com"
+region           = "us-east-1"
+athena_workgroup = "CID"
+database         = "customer_cur_data"
+cid_data_bucket  = "cid-123456789012-my-export"
+data_export_name = "my-export"
+
+# Optional
+# profile       = "your-aws-profile"
+# schedule      = "rate(1 hour)"
+# top_services  = 5
+# top_resources = 10

@@ -42,7 +42,7 @@ data "external" "athena_workgroup" {
 locals {
   account_id            = data.aws_caller_identity.current.account_id
   athena_results_bucket = data.external.athena_workgroup.result.bucket
-  cid_data_bucket       = "cid-${local.account_id}-data-exports"
+  cid_data_bucket       = var.cid_data_bucket
 }
 
 # ── SES sender identity ─────────────────────────────────────────────────────

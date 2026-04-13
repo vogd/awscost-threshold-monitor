@@ -40,11 +40,10 @@ def run_athena_query(query):
     return [dict(zip(headers, [c.get('VarCharValue','') for c in row['Data']])) for row in rows[1:]]
 
 def get_max_date():
-    rows = run_athena_query("SELECT MAX(usage_date) as max_date FROM summary_view")
+    rows = run_athena_query("SELECT MAX(line_item_usage_start_date) as max_date FROM cur2")
     return rows[0]['max_date']
 
-def build_cur2_date_filter(period, max_dt):
-    """Date filter for cur2 which uses line_item_usage_start_date."""
+def build_date_filter(period, max_dt):
     if period == 'daily':
         return f"date(line_item_usage_start_date) = date '{max_dt.strftime('%Y-%m-%d')}'"
     else:
@@ -52,7 +51,6 @@ def build_cur2_date_filter(period, max_dt):
         return f"date(line_item_usage_start_date) >= date '{month_start}' AND date(line_item_usage_start_date) <= date '{max_dt.strftime('%Y-%m-%d')}'"
 
 def get_thresholds():
-    """Returns list of (tag_key, tag_value, config) tuples from all SSM params under /cost/thresholds/"""
     ssm = boto3.client('ssm', region_name=REGION)
     paginator = ssm.get_paginator('get_parameters_by_path')
     result = []
@@ -87,25 +85,23 @@ def check_period(tag_key, tag_value, period, config, max_dt):
     if threshold is None or not recipients:
         return False
 
-    if period == 'daily':
-        date_filter = f"usage_date = TIMESTAMP '{max_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
-    else:
-        month_start = max_dt.replace(day=1, hour=0, minute=0, second=0).strftime('%Y-%m-%d %H:%M:%S')
-        date_filter = f"usage_date >= TIMESTAMP '{month_start}' AND usage_date <= TIMESTAMP '{max_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
+    date_filter = build_date_filter(period, max_dt)
+    tag_filter = f"resource_tags['user_{tag_key.replace('tag_', '')}'] = '{tag_value}'"
 
     try:
         rows = run_athena_query(f"""
-            SELECT service, region, linked_account_id as account,
-                   ROUND(SUM(unblended_cost), 2) as cost
-            FROM summary_view
-            WHERE {date_filter}
-              AND json_extract_scalar(tags_json, '$.{tag_key}') = '{tag_value}'
-            GROUP BY service, region, linked_account_id
+            SELECT line_item_product_code as service,
+                   COALESCE(product_region_code, 'global') as region,
+                   line_item_usage_account_id as account,
+                   ROUND(SUM(line_item_unblended_cost), 2) as cost
+            FROM cur2
+            WHERE {date_filter} AND {tag_filter}
+            GROUP BY line_item_product_code, product_region_code, line_item_usage_account_id
             ORDER BY cost DESC
             LIMIT {TOP_SERVICES}
         """)
     except Exception as e:
-        logger.error('CUR query failed for %s=%s period=%s: %s', tag_key, tag_value, period, str(e))
+        logger.error('Service query failed for %s=%s period=%s: %s', tag_key, tag_value, period, str(e))
         send_email(recipients,
             f'Cost Monitor ERROR: query failed for {tag_key}={tag_value} [{period}]',
             f'Athena query failed for {tag_key}={tag_value} (period={period}).\nError: {str(e)}')
@@ -126,19 +122,16 @@ def check_period(tag_key, tag_value, period, config, max_dt):
             for r in rows if float(r['cost']) > 0
         )
         try:
-            cur2_tag_col = f"resource_tags_user_{tag_key.replace('tag_', '')}"
-            cur2_date_filter = build_cur2_date_filter(period, max_dt)
             resources = run_athena_query(f"""
                 SELECT line_item_resource_id as resource_id,
                        line_item_product_code as service,
-                       product_region as region,
+                       COALESCE(product_region_code, 'global') as region,
                        line_item_usage_account_id as account,
                        ROUND(SUM(line_item_unblended_cost), 2) as cost
                 FROM cur2
-                WHERE {cur2_date_filter}
-                  AND {cur2_tag_col} = '{tag_value}'
+                WHERE {date_filter} AND {tag_filter}
                   AND line_item_resource_id != ''
-                GROUP BY line_item_resource_id, line_item_product_code, product_region, line_item_usage_account_id
+                GROUP BY line_item_resource_id, line_item_product_code, product_region_code, line_item_usage_account_id
                 ORDER BY cost DESC
                 LIMIT {TOP_RESOURCES}
             """)
