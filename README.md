@@ -5,7 +5,7 @@ Serverless cost alerting that queries CUDOS/CID Athena data, compares against co
 ## Architecture
 
 ```
-EventBridge (rate 1 hour) → Lambda → Athena (summary_view + cur2) → SES email
+EventBridge (rate 1 hour) → Lambda → Athena (cur2) → SES email
                                     ↑
                               SSM Parameters (thresholds)
 ```
@@ -29,15 +29,17 @@ The hourly granularity and resource-level ARN detail across all services are cap
 
 ### CUDOS/CID deployment
 
-This solution requires CUDOS (or CID) to be deployed in your account, which provides the Athena tables (`summary_view`, `cur2`) used for cost queries. CUDOS setup includes:
+This solution requires CUDOS (or CID) to be deployed in your account, which provides the `cur2` Athena table used for cost queries. CUDOS setup includes:
 
 1. **CUR 2.0 data export** — configured in AWS Billing console with:
    - Hourly granularity enabled
    - Resource IDs included
-   - Export to S3 bucket (e.g. `cid-<account_id>-data-exports`)
-2. **Athena workgroup** — typically named `CID`, with a results S3 bucket
-3. **Glue database and tables** — `cid_data_export` database with `summary_view` (aggregated daily costs) and `cur2` (raw hourly line items with resource ARNs)
-4. **Glue crawler or CloudFormation** — to keep table schemas in sync with CUR data
+   - `resource_tags` and `cost_category` columns selected (Column selection → 127/127)
+   - Export to S3 bucket (e.g. `cid-<account_id>-<your-bucket-name>`)
+2. **Cost allocation tags** — activated in Billing console (e.g. `env`, `project`)
+3. **Athena workgroup** — typically named `CID`, with a results S3 bucket
+4. **Glue database and table** — database (e.g. `customer_cur_data`) with `cur2` table containing hourly line items, resource ARNs, and `resource_tags` MAP column
+5. **Glue crawler** — to keep table schema in sync with CUR data
 
 Deploy CUDOS using the official workshop: https://catalog.workshops.aws/awscid/en-US
 
@@ -51,23 +53,47 @@ Deploy CUDOS using the official workshop: https://catalog.workshops.aws/awscid/e
 
 ```
 cost-monitor/
+├── LICENSE
+├── README.md
 └── terraform/
     ├── main.tf                # All resources (IAM, Lambda, EventBridge, SES)
     ├── variables.tf           # Configurable parameters
     ├── outputs.tf             # ARNs, bucket names, helper commands
-    ├── terraform.tfvars       # Your values
+    ├── terraform.tfvars       # Your values (gitignored)
     ├── lambda_function.py.tpl # Lambda source template
-    ├── README.md
     └── .gitignore
 ```
 
 ## Deploy
 
+Find your CUR 2.0 data export details first:
+
+```bash
+# List data exports to find your export name and S3 bucket
+aws bcm-data-exports list-exports --region us-east-1 --query 'Exports[].ExportArn' --output text
+
+# Get bucket and export name from the ARN
+aws bcm-data-exports get-export \
+  --export-arn "<your-export-arn>" \
+  --region us-east-1 \
+  --query 'Export.{Name:Name,Bucket:DestinationConfigurations.S3Destination.S3Bucket}' \
+  --output table
+```
+
+Then configure and deploy:
+
 ```bash
 cd cost-monitor/terraform
 
-# Edit sender email
-echo 'ses_sender = "your-email@gmail.com"' > terraform.tfvars
+# Set required parameters (use values from above)
+cat > terraform.tfvars <<EOF
+ses_sender        = "your-email@gmail.com"
+region            = "us-east-1"
+athena_workgroup  = "CID"
+database          = "customer_cur_data"
+cid_data_bucket   = "cid-<account_id>-<your-bucket-name>"
+data_export_name  = "<yourCUR-export-name>"
+EOF
 
 # Deploy
 terraform init
@@ -78,23 +104,42 @@ terraform apply
 
 ## Override defaults
 
+Optional parameters can be overridden on the command line:
+
 ```bash
 terraform apply \
-  -var='ses_sender=alerts@yourdomain.com' \
   -var='schedule=rate(6 hours)' \
-  -var='lambda_timeout=300' \
   -var='top_services=10' \
   -var='top_resources=20'
 ```
 
+Required parameters should be set in `terraform.tfvars` (see Deploy section above).
+
 All variables (see `variables.tf`):
+
+**Required — must match your CUDOS deployment:**
+
+| Variable | Source | Description |
+|---|---|---|
+| `ses_sender` | User-provided | From address for alerts (must be SES-verified) |
+| `region` | CUDOS region | AWS region where CUDOS is deployed |
+| `athena_workgroup` | CUDOS setup | Athena workgroup (e.g. `CID`) |
+| `database` | CUDOS setup | Athena database (e.g. `customer_cur_data`) |
+| `cid_data_bucket` | Data Exports | S3 bucket where CUR data exports are stored |
+| `data_export_name` | Data Exports | CUR 2.0 data export name (S3 path: `s3://<bucket>/cur2/<data_export_name>/data/`) |
+
+**Auto-derived (no input needed):**
+
+| Value | Source |
+|---|---|
+| `account_id` | `aws_caller_identity` data source |
+| `athena_results_bucket` | Read from Athena workgroup configuration |
+
+**Optional — Lambda configuration with sensible defaults:**
 
 | Variable | Default | Description |
 |---|---|---|
-| `ses_sender` | (required) | From address for alerts |
-| `region` | `us-east-1` | AWS region |
-| `athena_workgroup` | `CID` | Athena workgroup |
-| `database` | `cid_data_export` | Athena database |
+| `profile` | `null` | AWS CLI profile name |
 | `function_name` | `cost-threshold-monitor` | Lambda name |
 | `role_name` | `cost-monitor-lambda-role` | IAM role name |
 | `schedule` | `rate(1 hour)` | EventBridge schedule |
@@ -106,6 +151,13 @@ All variables (see `variables.tf`):
 ## Configure thresholds (SSM Parameters)
 
 Thresholds are stored in SSM under `/cost/thresholds/<tag_key>/<tag_value>`.
+
+The `<tag_key>` in the SSM path uses the `tag_` prefix convention. The Lambda strips this prefix and maps it to the CUR 2.0 `resource_tags` MAP column as `user_<tag>`:
+
+| SSM path | CUR 2.0 filter |
+|---|---|
+| `/cost/thresholds/tag_env/prod` | `resource_tags['user_env'] = 'prod'` |
+| `/cost/thresholds/tag_project/ml` | `resource_tags['user_project'] = 'ml'` |
 
 ### Format
 
@@ -125,19 +177,19 @@ Thresholds are stored in SSM under `/cost/thresholds/<tag_key>/<tag_value>`.
 ### Examples
 
 ```bash
-# Alert when tag_env=prod exceeds $100/day or $2000/month
+# Alert when env=prod exceeds $100/day or $2000/month
 aws ssm put-parameter \
   --name '/cost/thresholds/tag_env/prod' \
   --value '{"daily":{"threshold":100,"recipients":["team@example.com"]},"monthly":{"threshold":2000,"recipients":["finops@example.com"]}}' \
   --type String --region us-east-1
 
-# Alert when tag_env=dev exceeds $20/day
+# Alert when env=dev exceeds $20/day or $500/month
 aws ssm put-parameter \
   --name '/cost/thresholds/tag_env/dev' \
   --value '{"daily":{"threshold":20,"recipients":["dev-lead@example.com"]},"monthly":{"threshold":500,"recipients":["dev-lead@example.com"]}}' \
   --type String --region us-east-1
 
-# Alert for a specific project
+# Alert for a specific project tag
 aws ssm put-parameter \
   --name '/cost/thresholds/tag_project/ml-training' \
   --value '{"daily":{"threshold":500,"recipients":["ml-team@example.com"]},"monthly":{"threshold":10000,"recipients":["ml-team@example.com","finance@example.com"]}}' \
